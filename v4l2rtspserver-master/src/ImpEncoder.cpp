@@ -385,7 +385,8 @@ void osd_draw_detection_circle(shared_conf &currentConfig) {
 static void *update_thread(void *p) {
     loguru::set_thread_name("update_thread");
 
-    BaseFont *font = NULL;
+    // Default when fixed=false, big=false
+    BaseFont *font = FONT_SANS_SMALL;
 
     bool alreadySetDetectionRegion = false;
 
