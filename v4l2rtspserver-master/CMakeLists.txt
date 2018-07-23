@@ -52,7 +52,9 @@ include_directories("filter")
 add_library(filter filter/g711super.c  filter/noise_remover.c  filter/wave.c filter/mylog.c)
 target_link_libraries(${PROJECT_NAME} filter)
 
-include_directories(../freetype2/include)
+include_directories(../_install/include/freetype2)
+include_directories(../_install/include/pixman-1)
+include_directories(../_install/include/cairo)
 
 #include_directories(../live/liveMedia/)
 foreach (LIBLIVE555_module groupsock liveMedia UsageEnvironment BasicUsageEnvironment)
@@ -79,8 +81,7 @@ set(DEPENDLIBS ${CMAKE_CURRENT_SOURCE_DIR}/../live/liveMedia/libliveMedia.so ;
                 ${CMAKE_CURRENT_SOURCE_DIR}/uclibc/libimp.so ;
                 ${CMAKE_CURRENT_SOURCE_DIR}/uclibc/libsysutils.so;
                 ${CMAKE_CURRENT_SOURCE_DIR}/../lame/_install/lib/libmp3lame.so;
-                ${CMAKE_CURRENT_SOURCE_DIR}/../opus/.libs/libopus.so ;
-                ${CMAKE_CURRENT_SOURCE_DIR}/../freetype2/_install/lib/libfreetype.so
+                ${CMAKE_CURRENT_SOURCE_DIR}/../opus/.libs/libopus.so
 )
 
 foreach (LIB ${DEPENDLIBS})
@@ -90,11 +91,10 @@ endforeach (LIB)
 
 target_link_libraries(${PROJECT_NAME} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/libv4l2wrapper.a")
 target_link_libraries(${PROJECT_NAME} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/libfilter.a")
-
+target_link_libraries(${PROJECT_NAME} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../_install/lib/libpixman-1.a")
+target_link_libraries(${PROJECT_NAME} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../_install/lib/libfreetype.a")
+target_link_libraries(${PROJECT_NAME} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../_install/lib/libcairo.a")
 
 
 # Install
 install (TARGETS ${PROJECT_NAME} DESTINATION bin)
-
-
-
