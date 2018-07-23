@@ -44,6 +44,9 @@
 #include FT_MODULE_H
 #include FT_DRIVER_H
 
+#include <cairo.h>
+#include <cairo-ft.h>
+
 #include "sharedmem.h"
 #include "../../v4l2rtspserver-tools/sharedmem.h"
 #include "../inc/imp/imp_encoder.h"
@@ -224,6 +227,10 @@ class OSD {
             return _height;
         }
 
+        uint32_t* getData() {
+            return image;
+        }
+
         void setBounds(int x, int y, int width, int height) {
             _x = x;
             _y = y;
@@ -238,7 +245,7 @@ class OSD {
             attributes.rect.p0.y = _y;
             attributes.rect.p1.x = _x + _width - 1;
             attributes.rect.p1.y = _y + _height - 1;
-            attributes.fmt = PIX_FMT_ABGR;  // Actually RGBA?
+            attributes.fmt = PIX_FMT_RGBA;  // Actually RGBA?
 
             if (IMP_OSD_SetRgnAttr(region, &attributes) != 0) {
                 throw std::runtime_error("Could not set boundary attributes");
@@ -317,44 +324,22 @@ struct CachedGlyphBitmap {
     uint32_t *data;
 };
 
-std::pair<int, int> get_vertical_font_dimensions(FT_Face &face) {
-    int min_below = INT_MAX;
-    int max_above = INT_MIN;
+std::pair<int, int> get_vertical_font_dimensions(cairo_font_face_t *font, int font_size) {
 
-    FT_GlyphSlot slot = face->glyph;
-    int last_glyph_index = 0;
+    cairo_surface_t *surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 100, 2 * font_size);
+    cairo_t *cairo = cairo_create(surface);
 
-    // XXX: surely there's a better way to do this
-    for (char c = ' '; c < '~'; c++) {
-        int glyph_index = FT_Get_Char_Index(face, c);
+    cairo_set_font_face(cairo, font);
+    cairo_set_font_size(cairo, font_size);
 
-        if (FT_Load_Glyph(face, glyph_index, FT_LOAD_DEFAULT) != 0) {
-            throw std::runtime_error("Could not load glyph for character");
-        }
+    cairo_font_extents_t extents;
+    cairo_font_extents(cairo, &extents);
 
-        if (FT_Render_Glyph(slot, FT_RENDER_MODE_NORMAL) != 0) {
-            throw std::runtime_error("Could not render glyph for character");
-        }
+    cairo_surface_destroy(surface);
+    cairo_destroy(cairo);
 
-        FT_Vector kerning_delta = {0, 0};
-
-        if (last_glyph_index && glyph_index) {
-            FT_Get_Kerning(face, last_glyph_index, glyph_index, FT_KERNING_DEFAULT, &kerning_delta);
-        }
-
-        last_glyph_index = glyph_index;
-
-        if (min_below > (int)kerning_delta.y + (int)slot->bitmap_top - (int)slot->bitmap.rows) {
-            min_below = (int)kerning_delta.y + (int)slot->bitmap_top - (int)slot->bitmap.rows;
-        }
-
-        if (max_above < (int)kerning_delta.y + (int)slot->bitmap.rows) {
-            max_above = (int)kerning_delta.y + (int)slot->bitmap.rows;
-        }
-
-    }
-
-    return std::make_pair(max_above - min_below, min_below);
+    // Add some padding just in case
+    return std::make_pair(extents.ascent + extents.descent + 5, extents.descent + 5);
 }
 
 uint32_t mix_rgba_with_grayscale(uint32_t rgba_color, uint8_t value) {
@@ -369,86 +354,37 @@ uint32_t mix_rgba_with_grayscale(uint32_t rgba_color, uint8_t value) {
          | (((a * value) / 255) << 0);
 }
 
-void osd_draw_timestamp(OSD &timestamp_osd, FT_Face &face, int baseline_offset, shared_conf &currentConfig) {
+void osd_draw_timestamp(OSD &timestamp_osd, cairo_font_face_t *cairo_font, int font_size, int baseline_offset, shared_conf &currentConfig) {
+    LOG_S(INFO) << "[Timestamp OSD] Ready!";
+
     char text[STRING_MAX_SIZE];
     time_t current_time = time(nullptr);
     strftime(text, STRING_MAX_SIZE, currentConfig.osdTimeDisplay, localtime(&current_time));
 
-    FT_Vector pen;
-    pen.x = 0;
-    pen.y = timestamp_osd.getHeight() + baseline_offset;
-
     timestamp_osd.clear();
 
-    FT_GlyphSlot glyph = face->glyph;
-    int last_glyph_index = 0;
+    int stride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, timestamp_osd.getWidth());
+    cairo_surface_t *surface = cairo_image_surface_create_for_data((uint8_t*)timestamp_osd.getData(), CAIRO_FORMAT_ARGB32, timestamp_osd.getWidth(), timestamp_osd.getHeight(), stride);
 
-    for (int i = 0; text[i] != '\x00'; i++) {
-        char c = text[i];
+    cairo_t *cairo = cairo_create(surface);
 
-        int glyph_index = FT_Get_Char_Index(face, c);
+    uint32_t color = colorMap[currentConfig.osdColor];
+    float r = (float)((color & 0xFF000000) >> 24) / 255;
+    float g = (float)((color & 0x00FF0000) >> 16) / 255;
+    float b = (float)((color & 0x0000FF00) >> 8) / 255;
 
-        /*
-        map<int, CachedGlyphBitmap>::iterator glyph_iterator = glyph_map.find(glyph_index);
+    cairo_set_source_rgb(cairo, r, g, b);
 
-        if (glyph_iterator == m.end()) {
-            if (FT_Render_Glyph(glyph, FT_RENDER_MODE_NORMAL) != 0) {
-                LOG_S(INFO) << "Could not render glyph for character: " << c;
-                break;
-            }
-        }
-        */
+    cairo_set_font_face(cairo, cairo_font);
+    cairo_set_font_size(cairo, font_size);
 
-        if (FT_Load_Glyph(face, glyph_index, FT_LOAD_DEFAULT) != 0) {
-            LOG_S(INFO) << "Could not load glyph for character: " << c;
-            break;
-        }
+    cairo_move_to(cairo, 0, timestamp_osd.getHeight() - baseline_offset);
+    cairo_show_text(cairo, text);
 
-        if (FT_Render_Glyph(glyph, FT_RENDER_MODE_NORMAL) != 0) {
-            LOG_S(INFO) << "Could not render glyph for character: " << c;
-            break;
-        }
-
-        FT_Vector kerning_delta;
-        kerning_delta.x = 0;
-        kerning_delta.y = 0;
-
-        if (last_glyph_index && glyph_index) {
-            FT_Get_Kerning(face, last_glyph_index, glyph_index, FT_KERNING_DEFAULT, &kerning_delta);
-        }
-
-        last_glyph_index = glyph_index;
-
-        // Draw the bitmap
-        FT_Bitmap &bitmap = glyph->bitmap;
-
-        FT_Int start_x = pen.x + glyph->bitmap_left + kerning_delta.x;
-        FT_Int start_y = pen.y - glyph->bitmap_top + kerning_delta.y;
-
-        for (FT_Int x = 0; x < bitmap.width; x++) {
-            for (FT_Int y = 0; y < bitmap.rows; y++) {
-                FT_Int shifted_x = start_x + x;
-                FT_Int shifted_y = start_y + y;
-
-                // Don't draw out of bounds
-                if (shifted_x < 0 || shifted_y < 0 || shifted_x >= timestamp_osd.getWidth() || shifted_y >= timestamp_osd.getHeight()) {
-                    continue;
-                }
-
-                int value = bitmap.buffer[y * bitmap.width + x];
-
-                if (value != 0) {
-                    timestamp_osd.setPixel(shifted_x, shifted_y, mix_rgba_with_grayscale(colorMap[currentConfig.osdColor], value));
-                } else {
-                    timestamp_osd.setPixel(shifted_x, shifted_y, 0x00000000);
-                }
-            }
-        }
-
-        // Move the pen
-        pen.x += (glyph->advance.x / 64) + currentConfig.osdSpace;
-        pen.y -= glyph->advance.y / 64;
-    }
+    // This is wasteful but I don't see much of a performance impact with this approach
+    cairo_surface_destroy(surface);
+    cairo_destroy(cairo);
+    LOG_S(INFO) << "[Timestamp OSD] Done!";
 
     timestamp_osd.update();
 }
@@ -470,23 +406,26 @@ void osd_draw_detection_circle(OSD &motion_osd, shared_conf &currentConfig) {
 static void* update_thread(void *p) {
     loguru::set_thread_name("update_thread");
 
-    FT_Library library;
-    FT_Face face;
-    std::map< int, CachedGlyphBitmap> font_cache;
+    FT_Library ft_library = nullptr;
+    FT_Face ft_face = nullptr;
+    cairo_font_face_t *cairo_font = nullptr;
 
     int font_baseline_offset = 0;
+    int font_size = 0;
     
-    if (FT_Init_FreeType(&library) != 0) {
+    if (FT_Init_FreeType(&ft_library) != 0) {
         LOG_S(ERROR) << "Could not initialize FreeType";
         return NULL;
     }
 
+    /*
     FT_UInt hinting_engine = FT_HINTING_ADOBE;
 
-    if (FT_Property_Set(library, "cff", "hinting-engine", &hinting_engine) != 0) {
+    if (FT_Property_Set(ft_library, "cff", "hinting-engine", &hinting_engine) != 0) {
         LOG_S(ERROR) << "Could not set hinting engine";
         return NULL;
     }
+    */
 
     bool firstConfigPass = true;
     bool alreadySetDetectionRegion = false;
@@ -592,20 +531,28 @@ static void* update_thread(void *p) {
         }
 
         if (firstConfigPass || (currentConfig.osdFixedWidth != newConfig->osdFixedWidth)) {
+            if (ft_face != nullptr) {
+                FT_Done_Face(ft_face);
+            }
+
+            if (cairo_font != nullptr) {
+                cairo_font_face_destroy(cairo_font);
+            }
+
             int result;
 
-            FT_Done_Face(face);
-
             if (newConfig->osdFixedWidth) {
-                result = FT_New_Face(library, OSD_FONT_MONO, 0, &face);
+                result = FT_New_Face(ft_library, OSD_FONT_MONO, 0, &ft_face);
             } else {
-                result = FT_New_Face(library, OSD_FONT_SANS, 0, &face);
+                result = FT_New_Face(ft_library, OSD_FONT_SANS, 0, &ft_face);
             }
 
             if (result != 0) {
                 LOG_S(ERROR) << "Could not load or parse the font file";
                 return NULL;
             }
+
+            cairo_font = cairo_ft_font_face_create_for_ft_face(ft_face, FT_LOAD_DEFAULT);
 
             // to trigger OSD resize
             firstConfigPass = true;
@@ -626,13 +573,16 @@ static void* update_thread(void *p) {
         if (firstConfigPass || (currentConfig.osdSize != newConfig->osdSize)) {
             int size = (newConfig->osdSize == 0) ? 18 : 40;
 
-            if (FT_Set_Char_Size(face, 0, size * 64, 100, 100) != 0) {
-                LOG_S(ERROR) << "Could not set font size";
-                return NULL;
+            if (newConfig->osdSize == 0) {
+                font_size = 18;
+            } else if (newConfig->osdSize == 1) {
+                font_size = 40;
+            } else {
+                font_size = newConfig->osdSize;
             }
 
             LOG_S(INFO) <<  "Setting bounds";
-            std::pair<int, int> font_dimensions = get_vertical_font_dimensions(face);
+            std::pair<int, int> font_dimensions = get_vertical_font_dimensions(cairo_font, font_size);
 
             LOG_S(INFO) <<  "Max height is " << font_dimensions.first << " and baseline offset is " << font_dimensions.second;
             font_baseline_offset = font_dimensions.second;
@@ -699,12 +649,12 @@ static void* update_thread(void *p) {
 
         // Sleep until just a little after the next second
         spec.tv_sec = 0;
-        spec.tv_nsec = 101000000L - spec.tv_nsec;
+        spec.tv_nsec = 1010000000L - spec.tv_nsec;
 
         nanosleep(&spec, NULL);
 
         // Draw the OSD
-        osd_draw_timestamp(timestamp_osd, face, font_baseline_offset, currentConfig);
+        osd_draw_timestamp(timestamp_osd, cairo_font, font_size, font_baseline_offset, currentConfig);
         osd_draw_detection_circle(motion_osd, currentConfig);
 
         // Take a picture once every second
